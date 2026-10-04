@@ -1,0 +1,96 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Keeper Reaction</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;height:100%;background:#000;color:#fff;font-family:-apple-system,BlinkMacSystemFont,sans-serif}
+body{overflow:hidden}.app{height:100dvh;display:flex;flex-direction:column}.top{height:52px;background:#151515;display:flex;align-items:center;justify-content:space-between;padding:0 14px;z-index:3}
+.title{font-weight:900}.status{font-size:12px;color:#bbb}.stage{position:relative;flex:1;overflow:hidden;background:#111}
+video{width:100%;height:100%;object-fit:cover;transform:scaleX(-1)}canvas{position:absolute;inset:0;width:100%;height:100%;pointer-events:none;transform:scaleX(-1)}
+.badge{position:absolute;top:12px;left:12px;background:#000b;padding:7px 10px;border-radius:20px;font-size:12px;z-index:2}
+.overlay{position:absolute;inset:0;display:none;align-items:center;justify-content:center;background:#0009;z-index:5}.overlay.show{display:flex}
+.arrow{font-size:52vw;font-weight:1000;line-height:.8;text-shadow:0 8px 30px #000}.msg{font-size:32px;font-weight:900;text-align:center}
+.controls{background:#151515;padding:10px 12px calc(10px + env(safe-area-inset-bottom));display:grid;grid-template-columns:1fr 1fr;gap:8px;z-index:4}
+button{border:0;border-radius:13px;padding:14px 8px;font-size:15px;font-weight:900;color:#fff;background:#333}button.primary{background:#087ff5}.wide{grid-column:1/3}
+.note{grid-column:1/3;color:#aaa;font-size:11px;line-height:1.35}
+</style>
+</head>
+<body>
+<div class="app">
+<div class="top"><div class="title">KEEPER REACTION</div><div class="status" id="status">カメラ待機中</div></div>
+<div class="stage">
+<video id="video" playsinline muted></video><canvas id="pose"></canvas>
+<div class="badge" id="badge">POSE: OFF</div>
+<div class="overlay" id="overlay"><div id="overlayText"></div></div>
+</div>
+<div class="controls">
+<button class="primary" id="camera">カメラ開始</button><button id="start">練習開始</button>
+<button class="wide" id="test">矢印テスト</button>
+<div class="note">iPhoneのSafariでHTTPSのページとして開いてください。カメラ映像を使い、人体姿勢を推定して足の動きを見ます。</div>
+</div>
+</div>
+<script type="module">
+import {PoseLandmarker, FilesetResolver} from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/+esm";
+
+const video=document.getElementById("video"), canvas=document.getElementById("pose"), ctx=canvas.getContext("2d");
+const status=document.getElementById("status"), badge=document.getElementById("badge"), overlay=document.getElementById("overlay"), text=document.getElementById("overlayText");
+let stream, landmarker, timer, running=false, lastVideoTime=-1, prevL=null, prevR=null, motionFrames=0;
+
+async function setupPose(){
+ const vision=await FilesetResolver.forVisionTasks("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.22/wasm");
+ landmarker=await PoseLandmarker.createFromOptions(vision,{
+  baseOptions:{modelAssetPath:"https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task",delegate:"GPU"},
+  runningMode:"VIDEO",numPoses:1
+ });
+ badge.textContent="POSE: ON";
+}
+async function camera(){
+ try{
+  stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"user",width:{ideal:1280},height:{ideal:720}},audio:false});
+  video.srcObject=stream; await video.play();
+  canvas.width=video.videoWidth; canvas.height=video.videoHeight;
+  status.textContent="カメラON";
+  await setupPose(); requestAnimationFrame(loop);
+ }catch(e){status.textContent="カメラ起動失敗";alert("カメラを許可してください。iPhoneのSafariでHTTPSのページを開いている必要があります。");console.error(e)}
+}
+function loop(){
+ if(landmarker && video.readyState>=2 && video.currentTime!==lastVideoTime){
+  const r=landmarker.detectForVideo(video,performance.now()); lastVideoTime=video.currentTime;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  if(r.landmarks?.[0]){
+   const lm=r.landmarks[0], L=lm[27], R=lm[28];
+   draw(lm);
+   if(prevL&&prevR){
+    const m=Math.hypot(L.x-prevL.x,L.y-prevL.y)+Math.hypot(R.x-prevR.x,R.y-prevR.y);
+    if(m>.025) motionFrames++; else motionFrames=Math.max(0,motionFrames-1);
+   }
+   prevL={x:L.x,y:L.y};prevR={x:R.x,y:R.y};
+   if(running) status.textContent=motionFrames>4?"足の動きを検出中…":"バタバタ待機中…";
+  }
+ }
+ requestAnimationFrame(loop);
+}
+function draw(lm){
+ const pts=[11,12,23,24,25,26,27,28];
+ ctx.fillStyle="#00ff88";
+ for(const i of pts){const p=lm[i];ctx.beginPath();ctx.arc(p.x*canvas.width,p.y*canvas.height,7,0,Math.PI*2);ctx.fill()}
+}
+function arrow(){
+ clearTimeout(timer); running=false;
+ text.className="arrow"; text.textContent=Math.random()<.5?"←":"→"; overlay.classList.add("show");status.textContent="MOVE!";
+ timer=setTimeout(()=>{overlay.classList.remove("show");text.textContent="";status.textContent="次のセット待ち";},900);
+}
+function start(){
+ if(!stream||!landmarker){alert("先にカメラを開始してください。");return}
+ clearTimeout(timer);running=true;status.textContent="バタバタしてください";
+ const delay=3000+Math.random()*3000;
+ timer=setTimeout(arrow,delay);
+}
+document.getElementById("camera").onclick=camera;
+document.getElementById("start").onclick=start;
+document.getElementById("test").onclick=arrow;
+</script>
+</body>
+</html>
